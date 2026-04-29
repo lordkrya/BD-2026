@@ -1,6 +1,12 @@
--- CREATE DATABASE ACID_Sound;
 -- \connect acid_sound
 -- psql -U postgres -W -p 5432 -h localhost -d acid_sound
+-- \! chcp 1251
+-- \dt
+
+-- DROP DATABASE IF EXISTS ACID_Sound;
+
+-- CREATE DATABASE ACID_Sound;
+
 
 -- Проверка на то, что таблиц не существует, иначе пересоздаём
 
@@ -38,6 +44,7 @@ CREATE TYPE Mood AS ENUM ('energetic', 'melancholic', 'chill', 'playful', 'roman
 CREATE TYPE TypeUuid AS ENUM ('author', 'playlist', 'song', 'genre', 'album');
 CREATE TYPE Source AS ENUM ('search', 'recommendation', 'playlist', 'subscription', 'other');
 CREATE TYPE TypeAuthor AS ENUM ('user', 'artist');
+CREATE TYPE TypePlaylist AS ENUM ('public', 'private', 'favorite', 'disliked');
 
 -- Создание таблиц
 
@@ -54,13 +61,41 @@ CREATE TABLE "user" (
     date_of_birth date CHECK (date_of_birth >= '1900-01-01' AND date_of_birth <= CURRENT_DATE),
     user_login varchar(64) UNIQUE NOT NULL,
     user_password bytea NOT NULL,
-    phone_number char(16) UNIQUE CHECK (phone_number ~ '(\+)?[0-9]{1,15}'),
+    phone_number varchar(16) UNIQUE CHECK (phone_number ~ '(\+)?[0-9]{1,15}'),
     CONSTRAINT fk_id_author
         FOREIGN KEY (id_author)
         REFERENCES author(id_author)
         ON DELETE RESTRICT
         ON UPDATE CASCADE
 );
+-- Функция для автоматического создания родителя
+CREATE OR REPLACE FUNCTION create_author_for_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO author (id_author, type_author) 
+    VALUES (NEW.id_author, 'user');
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- Вешаем триггер на user
+CREATE TRIGGER trg_user_before_insert
+BEFORE INSERT ON "user"
+FOR EACH ROW EXECUTE FUNCTION create_author_for_user();
+-- Функция для удаления записи из author при удалении пользователя
+CREATE OR REPLACE FUNCTION delete_author_for_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM author WHERE id_author = OLD.id_author;
+    
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер на user
+CREATE TRIGGER trg_user_delete_author
+AFTER DELETE ON "user"
+FOR EACH ROW EXECUTE FUNCTION delete_author_for_user();
+
 
 -- E2
 CREATE TABLE bankCard (
@@ -75,6 +110,7 @@ CREATE TABLE bankCard (
         ON UPDATE CASCADE
 );
 
+
 -- E3
 CREATE TABLE musicCard (
     id_author uuid PRIMARY KEY,
@@ -87,10 +123,25 @@ CREATE TABLE musicCard (
         ON DELETE CASCADE
         ON UPDATE CASCADE
 );
+-- Функция для автоматического создания музыкальной карты
+CREATE OR REPLACE FUNCTION create_music_card_for_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO musicCard (id_author, frequency, activity, mood) 
+    VALUES (NEW.id_author, 0, 0, NULL); -- Начальные значения
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер на user
+CREATE TRIGGER trg_user_create_card
+AFTER INSERT ON "user"
+FOR EACH ROW EXECUTE FUNCTION create_music_card_for_user();
+
 
 -- E4
 CREATE TABLE musicCardHistory (
-    code_change integer,
+    code_change bigint GENERATED ALWAYS AS IDENTITY,
     id_author uuid,
     date_change timestamp NOT NULL CHECK (date_change <= CURRENT_TIMESTAMP),
     is_add_change boolean NOT NULL, -- 1 - добавление рекомендации, 0 удаление из рекомендаций
@@ -110,32 +161,117 @@ CREATE TABLE playlist (
     index_playlist uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     id_author uuid,
     name_playlist varchar(256) NOT NULL,
+    type_playlist TypePlaylist NOT NULL,
     date_playlist date NOT NULL CHECK (date_playlist <= CURRENT_DATE),
     CONSTRAINT fk_id_author
         FOREIGN KEY (id_author)
         REFERENCES "user"(id_author)
         ON DELETE CASCADE
-        ON UPDATE CASCADE
+        ON UPDATE CASCADE,
+    CONSTRAINT unique_user_playlist
+        UNIQUE (id_author, name_playlist)
 );
+
+-- Функция для автоматического создания плейлиста favorite/disliked при добавлении пользователя
+CREATE OR REPLACE FUNCTION create_favorite_playlist()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO playlist (id_author, name_playlist, type_playlist, date_playlist)
+    VALUES (NEW.id_author, 'favorite', 'favorite', CURRENT_DATE);
+    INSERT INTO playlist (id_author, name_playlist, type_playlist, date_playlist)
+    VALUES (NEW.id_author, 'disliked', 'disliked', CURRENT_DATE);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер на user для создания плейлиста favorite/disliked
+CREATE TRIGGER trg_user_create_favorite_playlist
+AFTER INSERT ON "user"
+FOR EACH ROW EXECUTE FUNCTION create_favorite_playlist();
+
+-- Функция для защиты от удаления плейлиста favorite/disliked (кроме случая каскадного удаления)
+CREATE OR REPLACE FUNCTION prevent_favorite_playlist_deletion()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.type_playlist = 'favorite' OR OLD.type_playlist = 'disliked' THEN
+		IF EXISTS (SELECT 1 FROM "user" WHERE id_author = OLD.id_author) THEN
+			RAISE EXCEPTION 'Cannot delete favorite/disliked playlist directly. It will be deleted automatically when the user is deleted.';
+		END IF;
+    END IF;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер на playlist для защиты от удаления favorite плейлиста
+CREATE TRIGGER trg_playlist_before_delete
+BEFORE DELETE ON playlist
+FOR EACH ROW EXECUTE FUNCTION prevent_favorite_playlist_deletion();
+
+-- Дополнительная защита от обновления favorite/disliked плейлиста (нельзя изменить тип)
+CREATE OR REPLACE FUNCTION protect_favorite_playlist_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.type_playlist = 'favorite' OR OLD.type_playlist = 'disliked' THEN
+    	RAISE EXCEPTION 'Cannot modify favorite/disliked playlist type.';
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер на playlist для защиты от изменения favorite плейлиста
+CREATE TRIGGER trg_playlist_before_update
+BEFORE UPDATE ON playlist
+FOR EACH ROW EXECUTE FUNCTION protect_favorite_playlist_update();
+
+
 
 -- E6
 CREATE TABLE musicArtist (
     id_author uuid PRIMARY KEY,
     name_artist varchar(256) UNIQUE NOT NULL,
     discription text,
+    popularity integer DEFAULT 0,
     CONSTRAINT fk_id_author
         FOREIGN KEY (id_author)
         REFERENCES author(id_author)
         ON DELETE RESTRICT
         ON UPDATE CASCADE
 );
+-- Функция для артиста
+CREATE OR REPLACE FUNCTION create_author_for_artist()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO author (id_author, type_author) 
+    VALUES (NEW.id_author, 'artist'); -- Тип 'artist'
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер для артиста
+CREATE TRIGGER trg_artist_before_insert
+BEFORE INSERT ON musicArtist
+FOR EACH ROW EXECUTE FUNCTION create_author_for_artist();
+-- Функция для удаления записи из author при удалении артиста
+CREATE OR REPLACE FUNCTION delete_author_for_artist()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM author WHERE id_author = OLD.id_author;
+    
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+-- Триггер на musicArtist
+CREATE TRIGGER trg_artist_delete_author
+AFTER DELETE ON musicArtist
+FOR EACH ROW EXECUTE FUNCTION delete_author_for_artist();
+
 
 -- E7
 CREATE TABLE musicGenre (
     index_genre uuid DEFAULT gen_random_uuid() PRIMARY KEY,
     name_genre varchar(64) UNIQUE NOT NULL,
     discription text,
-    popularity integer
+    popularity integer DEFAULT 0
 );
 
 -- E8
@@ -145,6 +281,7 @@ CREATE TABLE album (
     name_album varchar(64) NOT NULL,
     date_album date CHECK (date_album <= CURRENT_DATE),
     number_of_songs integer CHECK (number_of_songs > 0),
+    popularity integer DEFAULT 0,
     CONSTRAINT fk_index_genre 
         FOREIGN KEY (index_genre)
         REFERENCES musicGenre(index_genre)
@@ -160,6 +297,7 @@ CREATE TABLE song (
     name_song varchar(64) NOT NULL,
     text_song text,
     during time NOT NULL CHECK (during > '00:00:00'::time),
+    popularity integer DEFAULT 0,
     CONSTRAINT fk_number_album
         FOREIGN KEY (number_album)
         REFERENCES album(number_album)
@@ -174,11 +312,12 @@ CREATE TABLE song (
 
 -- E10
 CREATE TABLE comment (
-    number_comment integer,
+    number_comment bigint GENERATED ALWAYS AS IDENTITY,
     id_author uuid,
     code_song uuid NOT NULL,
     text_comment text,
-    grade char,
+    grade real CHECK (grade BETWEEN 1 AND 10),
+    date_comment timestamp NOT NULL CHECK (date_comment <= CURRENT_DATE),
     CONSTRAINT pk_comment
         PRIMARY KEY (number_comment, id_author),
     CONSTRAINT fk_code_song
@@ -204,13 +343,13 @@ CREATE TABLE premiumFunc (
     CONSTRAINT fk_id_author 
         FOREIGN KEY (id_author)
         REFERENCES "user"(id_author)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
 -- E12
 CREATE TABLE listeningHistory (
-    code_listening integer,
+    code_listening bigint GENERATED ALWAYS AS IDENTITY,
     id_author uuid,
     code_song uuid NOT NULL,
     start_listen timestamp NOT NULL CHECK (start_listen <= CURRENT_TIMESTAMP),
@@ -258,12 +397,12 @@ CREATE TABLE performance (
     CONSTRAINT fk_id_author
         FOREIGN KEY (id_author)
         REFERENCES author(id_author)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE,
     CONSTRAINT fk_code_song
         FOREIGN KEY (code_song)
         REFERENCES song(code_song)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
@@ -276,12 +415,12 @@ CREATE TABLE subscription (
     CONSTRAINT fk_id_author_user
         FOREIGN KEY (id_author_user)
         REFERENCES "user"(id_author)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE,
     CONSTRAINT fk_id_author_artist
         FOREIGN KEY (id_author_artist)
         REFERENCES musicArtist(id_author)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
@@ -294,12 +433,12 @@ CREATE TABLE tableOfContents (
     CONSTRAINT fk_index_playlist
         FOREIGN KEY (index_playlist)
         REFERENCES playlist(index_playlist)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE,
     CONSTRAINT fk_code_song
         FOREIGN KEY (code_song)
         REFERENCES song(code_song)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
@@ -317,7 +456,7 @@ CREATE TABLE preferenceForSongs (
     CONSTRAINT fk_code_song
         FOREIGN KEY (code_song)
         REFERENCES song(code_song)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
@@ -335,7 +474,7 @@ CREATE TABLE preferenceForGenre (
     CONSTRAINT fk_index_genre
         FOREIGN KEY (index_genre)
         REFERENCES musicGenre(index_genre)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
 
@@ -353,6 +492,6 @@ CREATE TABLE preferenceForArtist (
     CONSTRAINT fk_id_author_artist
         FOREIGN KEY (id_author_artist)
         REFERENCES musicArtist(id_author)
-        ON DELETE RESTRICT
+        ON DELETE CASCADE
         ON UPDATE CASCADE
 );
