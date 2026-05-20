@@ -26,14 +26,14 @@ BEGIN
 
     -- Обходим всех пользователей, у которых есть прослушивания за последнюю неделю
     FOR v_user_record IN
-    	-- 0. Проверяем, что пользователь прослушал >= 3 произведений за последний день
+    	-- 0. Проверяем, что пользователь прослушал >= 7 произведений за последний день
         SELECT psw.id_author
         FROM prep_song_weights psw
         GROUP BY psw.id_author
         HAVING COUNT(*) >= 7
     LOOP
     
-        -- 1. ОБНОВЛЕНИЕ preferenceForSongs
+        -- 1. обновление preferenceForSongs
 
         DELETE FROM preferenceForSongs pfs
         WHERE pfs.id_author = v_user_record.id_author;
@@ -62,7 +62,7 @@ BEGIN
         FROM song_weights
         ON CONFLICT (id_author, code_song) DO NOTHING;
 
-        -- 2. ОБНОВЛЕНИЕ preferenceForGenre
+        -- 2. обн. preferenceForGenre
 
         DELETE FROM preferenceForGenre pfg
         WHERE pfg.id_author = v_user_record.id_author;
@@ -91,7 +91,7 @@ BEGIN
         FROM genre_weights
         ON CONFLICT (id_author, index_genre) DO NOTHING;
 
-        -- 3. ОБНОВЛЕНИЕ preferenceForArtist
+        -- 3. об. preferenceForArtist
 
         DELETE FROM preferenceForArtist pfa
         WHERE pfa.id_author_user = v_user_record.id_author;

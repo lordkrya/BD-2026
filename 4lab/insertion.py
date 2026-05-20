@@ -16,7 +16,7 @@ DB_CONFIG = {
     'user': 'postgres',
     'password': '123321',
     'host': 'localhost',
-    'port': 5432
+    'port': 54326
 }
 
 # ENUM значения

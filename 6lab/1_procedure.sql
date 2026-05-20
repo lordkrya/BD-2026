@@ -93,7 +93,7 @@ BEGIN
               AND pl2.type_playlist = 'disliked'
         )
         GROUP BY ss.code_song, ss.popularity, ss.source_multiplier, ss.source_type
-        -- Исключаем песни, которые были полностью прослушаны недавно (time_multiplier = 0)
+        -- Исключаем песни, которые были полностью прослушаны недавно (time_multiplier ~ 0)
         HAVING NOT (
             MAX(lh.start_listen) IS NOT NULL
             AND MAX(lh.start_listen) > CURRENT_TIMESTAMP - INTERVAL '1 day'
