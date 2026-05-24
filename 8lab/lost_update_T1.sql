@@ -7,6 +7,7 @@ BEGIN;
 -- READ: читаем текущее значение
 SELECT expiration FROM premiumFunc 
 WHERE id_author = '26081949-630d-40c0-bbdd-664e5b597aad' -- FOR UPDATE
+-- Данная нестрогая блокировка разрешит Lost Update аномалию
 ;
 
 -- На клиенте: вычисляем новое значение

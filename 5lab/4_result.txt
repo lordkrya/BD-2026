@@ -1,0 +1,7 @@
+Результат 4 запроса:
+
+"search"	19921	70.34	329.1176145775814467	"Jazz, Electronic, Country"
+"recommendation"	19589	70.27	328.3914952269130635	"Jazz, Hip-Hop, Electronic"
+"playlist"	19833	70.08	329.6998941158674936	"Jazz, Electronic, Hip-Hop"
+"subscription"	19891	70.42	329.2812829923080790	"Hip-Hop, Country, Electronic"
+"other"	19780	70.34	329.4132962588473205	"Electronic, Jazz, Country"

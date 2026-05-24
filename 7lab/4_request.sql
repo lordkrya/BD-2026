@@ -1,3 +1,5 @@
+DISCARD ALL;
+
 -- Покрывает все поля, нужные из song: during, index_genre
 -- Позволяет избежать обращения к таблице
 CREATE INDEX idx_song_covering_listening 
